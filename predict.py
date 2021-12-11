@@ -22,6 +22,7 @@ import datetime
 import numpy as np
 import pandas as pd
 import hashlib
+from horology import timed
 
 class PeriodResults:
     def __init__(self, df_data, prediction_period=1, prediction_field="close"):
@@ -48,6 +49,7 @@ class PeriodResults:
 
 
 class DataReader:
+    @timed
     def __init__(self, ticker, fromDate="1990-01-01", toDate="2021-12-31", interval="1d", index_as_date=True, fromWeb=True):
         self.ticker = ticker
         self.fromDate = fromDate
@@ -114,14 +116,15 @@ class Predictor:
 
         # todo
         self.periodResults = {"startTrainDate": self.startTrainDate, "endTrainDate": self.endTrainDate, "trainPeriods": trainPeriods,
-                              "predictPeriods": predictPeriods, "periodRules": [], "periodsResults": [], "period_up_rules": [], "period_down_rules": []}
+                              "predictPeriods": predictPeriods, "periodRules": [], "periodsResults": [], "period_up_rules": [],
+                              "period_down_rules": [], "predicted_up_ratio": None, "predicted_down_ratio": None,
+                              "predicted_up_total_profit": None, "predicted_up_max_profit": None, "predicted_up_max_loss": None,
+                              "predicted_down_total_profit": None, "predicted_down_max_profit": None, "predicted_down_max_loss": None,
+
+                             }
+        self.periodsResultsList = [] #store rules/predictions/stats by period
         self.trainRules = trainRules
         self.predictRules = predictRules
-
-
-        self.periodRules = []
-        self.predictionResults = []
-        self.periodsData = [] #store rules/predictions by period
 
 
 
@@ -186,7 +189,7 @@ class Predictor:
         self.df_data_copy.columns.drop(list(self.df_data_copy.filter(regex='diff_')))  # remove tmp cols
         #self.df_data_copy = self.df_data_copy.drop('ticker', 1)
 
-
+    @timed
     def preprocBinaryFeatures(self, df_data):
         start = timeit.default_timer()
         # split continuous and binary features
@@ -240,6 +243,7 @@ class Predictor:
         df[shift_field] = df[shift_field].shift(shift_period)
         return df.dropna()
 
+    #@timed
     def queryBinRuleSqlDb(self, table, fields, values, predict_field_kv, start_idx, end_idx): #todo minPctChange>=3 + multipleShiftTargetData
         query = f"select * from {table} where "
         cols = " AND ".join([f"{fields[x]} = {values[x]}" for x in range(len(fields))])
@@ -276,7 +280,7 @@ class Predictor:
         #start = timer()
         #dfFeatures.drop(predictField, axis='columns', inplace=True)
         total_bin_features = len(dfFeatures) #todo chunks if rules_amount > 1000
-        max_indicators = 2 #2 #3 #5 #7 #10 ##total_bin_features - 1 if total_bin_features <= 11 else 11 #todo upto 30 - bigCombsArray?
+        max_indicators = 3 #2 #3 #5 #7 #10 ##total_bin_features - 1 if total_bin_features <= 11 else 11 #todo upto 30 - bigCombsArray?
         ##periods = exploreStart  #500 #50 #200
         #rule_pct = 0.55 #0.6 #0.8 #0.5 0.75
         total_records = dfTarget.shape[0]
@@ -442,56 +446,95 @@ class Predictor:
         down_rules = best_down_rules_q + worst_up_rules_q
         down_rules_queries = [f"select * from {tableName} where {' and '.join(item.split(' and ')[:-1])} and rowid>={startPredict} and rowid<{startPredict + predictPeriods}"
                                 for item in down_rules]
-        predict_dates = [{'date': x[0], 'matched': False, 'id': x[1]} for x in Db.execute(
+        predict_dates_up = [{'date': x[0], 'matched': False, 'id': x[1]} for x in Db.execute(
             f"select id, rowid from {tableName} where  rowid>={startPredict} and rowid<{startPredict + predictPeriods}")]
-        predict_days = [x['date'].replace(" 00:00:00.000000", "") for x in predict_dates]
+        predict_days_up = [x['date'].replace(" 00:00:00.000000", "") for x in predict_dates_up]
         #up
         for q in up_rules_queries:
             rs = Db.execute(q)
-            if len(rs) == predictPeriods or len([i for i in predict_dates if i['matched'] == True]) == predictPeriods:
-                for d in predict_dates:
+            if len(rs) == predictPeriods or len([i for i in predict_dates_up if i['matched'] == True]) == predictPeriods:
+                for d in predict_dates_up:
                     d['matched'] = True
                 break
             for d in rs:
-                for dd in predict_dates:
+                for dd in predict_dates_up:
                     if d['id'] == dd['date']:
                         dd['matched'] = True
-        up_entries = [d["id"] for d in predict_dates if d['matched'] == True]
-        up_exits = [d + abs(self.predictFieldShift) for d in up_entries]
-        rsPredictions = Db.execute(f"select {predictField} from {tableName} where rowid in ({','.join([str(i) for i in up_exits])})")
-        print(f"Up {len([x for x in rsPredictions if x[0] == 1])} good trades from total {len(rsPredictions)} trades in period between {predict_days[0]}-{predict_days[-1]}")
-        #print(up_rules)
-        profit = None
-        if len(up_exits) > 0:
-            profit = Db.execute(
-                f"select sum(pctChange_Close) from {tableName.replace('_binary_features', '')} where id in (select id from {tableName} where rowid in ({','.join([str(i) for i in up_exits])}))")
-        if profit is not None:
-            print(f"Up Period Profit: {profit}% in period between {predict_days[0]}-{predict_days[-1]}")
+        # up_entries = [d["id"] for d in predict_dates_up if d['matched'] == True]
+        # up_exits = [d + abs(self.predictFieldShift) for d in up_entries]
+        # rsPredictionsUp = Db.execute(f"select {predictField} from {tableName} where rowid in ({','.join([str(i) for i in up_exits])})")
+        # print(f"Up {len([x for x in rsPredictions if x[0] == 1])} good trades from total {len(up_entries)} trades in period between {predict_days_up[0]}-{predict_days_up[-1]}")
+        # #print(up_rules)
+        # profit = None
+        # if len(up_exits) > 0:
+        #     profit = Db.execute(
+        #         f"select sum(pctChange_Close) from {tableName.replace('_binary_features', '')} where id in (select id from {tableName} where rowid in ({','.join([str(i) for i in up_exits])}))")
+        # if profit is not None:
+        #     print(up_entries)
+        #     print(f"Up Period Profit: {profit}% in period between {predict_days_up[0]}-{predict_days_up[-1]}")
 
         # down
-        predict_dates = [{'date': x[0], 'matched': False, 'id': x[1]} for x in Db.execute(
+        predict_dates_down = [{'date': x[0], 'matched': False, 'id': x[1]} for x in Db.execute(
             f"select id, rowid from {tableName} where  rowid>={startPredict} and rowid<{startPredict + predictPeriods}")]
-        predict_days = [x['date'].replace(" 00:00:00.000000", "") for x in predict_dates]
+        predict_days_down = [x['date'].replace(" 00:00:00.000000", "") for x in predict_dates_down]
         for q in down_rules_queries:
             rs = Db.execute(q)
-            if len(rs) == predictPeriods or len([i for i in predict_dates if i['matched'] == True]) == predictPeriods:
-                for d in predict_dates:
+            if len(rs) == predictPeriods or len([i for i in predict_dates_down if i['matched'] == True]) == predictPeriods:
+                for d in predict_dates_down:
                     d['matched'] = True
                 break
             for d in rs:
-                for dd in predict_dates:
+                for dd in predict_dates_down:
                     if d['id'] == dd['date']:
                         dd['matched'] = True
-        down_entries = [d["id"] for d in predict_dates if d['matched'] == True]
+
+        up_entries = [d["id"] for d in predict_dates_up if d['matched'] == True]
+        down_entries = [d["id"] for d in predict_dates_down if d['matched'] == True]
+        up_entries = list(set(up_entries).difference(set(down_entries)))
+        down_entries = list(set(down_entries).difference(set(up_entries)))
+
+        up_exits = [d + abs(self.predictFieldShift) for d in up_entries]
+        rsPredictionsUp = Db.execute(f"select {predictField} from {tableName} where rowid in ({','.join([str(i) for i in up_exits])})")
+        print(len(up_rules), 'up_rules')
+        profit_up = None
+        if len(up_exits) > 0:
+            print(
+                f"Up {len([x for x in rsPredictionsUp if x[0] == 1])} good trades from total {len(up_entries)} trades in period between {predict_days_up[0]}-{predict_days_up[-1]}")
+            profit_up = Db.execute(
+                f"select sum(pctChange_Close) from {tableName.replace('_binary_features', '')} where id in (select id from {tableName} where rowid in ({','.join([str(i) for i in up_exits])}))")
+        if profit_up is not None:
+            profit_up = profit_up[0][0]
+            print(up_entries)
+            print(f"Up Period Profit: {profit_up}% in period between {predict_days_up[0]}-{predict_days_up[-1]}")
+
         down_exits = [d + abs(self.predictFieldShift) for d in down_entries]
-        rsPredictions = Db.execute(f"select {predictField} from {tableName} where rowid in ({','.join([str(i) for i in down_exits])})")
-        print(f"Down {len([x for x in rsPredictions if x[0] == 0])} good trades from total {len(rsPredictions)} trades in period between {predict_days[0]}-{predict_days[-1]}")
-        #print(down_rules)
-        profit = None
+        rsPredictionsDown = Db.execute(f"select {predictField} from {tableName} where rowid in ({','.join([str(i) for i in down_exits])})")
+        print(len(down_rules), 'down_rules')
+        profit_down = None
         if len(down_exits)>0:
-            profit = Db.execute(f"select sum(pctChange_Close) from {tableName.replace('_binary_features', '')} where id in (select id from {tableName} where rowid in ({','.join([str(i) for i in down_exits])}))")
-        if profit is not None:
-            print(f"Down Period Profit: {profit}% in period between {predict_days[0]}-{predict_days[-1]}")
+            print(f"Down {len([x for x in rsPredictionsDown if x[0] == 0])} good trades from total {len(down_entries)} trades in period between {predict_days_down[0]}-{predict_days_down[-1]}")
+            profit_down = Db.execute(f"select sum(pctChange_Close) from {tableName.replace('_binary_features', '')} where id in (select id from {tableName} where rowid in ({','.join([str(i) for i in down_exits])}))")
+        if profit_down is not None:
+            print(down_entries)
+            profit_down = profit_down[0][0] * -1 #profit -> change signs
+            print(f"Down Period Profit: {profit_down}% in period between {predict_days_down[0]}-{predict_days_down[-1]}")
+
+        if profit_up is not None and profit_down is not None:
+            total_period_profit = profit_up+profit_down
+        elif profit_up is None and profit_down is not None:
+            total_period_profit = profit_down
+        elif profit_up is not None and profit_down is None:
+            total_period_profit = profit_up
+        else:
+            total_period_profit = 'None'
+        print(f"Period PL {total_period_profit}%")
+        self.periodResults['periodsResults'].append({
+            'from': startPredict,
+            'to': startPredict + predictPeriods,
+            'total_period_profit': total_period_profit,
+            'period_profit_up': profit_up,
+            'period_profit_down': profit_down
+        })
 
 
         #todo good-bad + minTrainedTradesAmount
@@ -563,7 +606,7 @@ class Predictor:
         #assert len(self.df_data_copy) > self.trainPeriods
         start = timeit.default_timer()
         self.df_data_copy = preprocData(self.df_data, self.startTrain, len(self.df_data), loadFromFile=False)
-        tableName = self.ticker #df_data_copy['ticker'][0]
+        tableName = self.ticker
         tableName = tableName.replace("^", "")
         self.ticker = tableName
         self.cleanData()
@@ -582,6 +625,8 @@ class Predictor:
         # self.exploreBinaryRules(binary_features, f"{self.ticker}_binary_features", self.predictField,
         #                         self.predictFieldShift, 0, self.trainPeriods)
 
+        print()
+        print("Total Run profit", sum([x['total_period_profit'] for x in self.periodResults['periodsResults']]))
         print(f"Run took {timeit.default_timer()-start}s")
         exit(0) #todo to exclude predict and "predict_field" from the rule set
 
@@ -608,6 +653,6 @@ if __name__ == "__main__":
     start = timeit.default_timer() #^GSPC AI
     ticker = 'PLTR'
     data = DataReader(ticker=ticker, fromDate="1999-01-01", toDate="2021-12-31", interval="1d", index_as_date=True).getData() #todo global -> distrubute to Predictors Grid/Threads/Gpus
-    predictor = Predictor(ticker, data, predictField="isUp_close", predictFieldShift=-1, startTrain=-290, trainPeriods=50, predictPeriods=5) #todo tochange? startTrain to last
+    predictor = Predictor(ticker, data, predictField="isUp_close", predictFieldShift=-1, startTrain=-290, trainPeriods=100, predictPeriods=20) #todo tochange? startTrain to last
     predictor.run()
     print(f"Run took {timeit.default_timer() - start}s")

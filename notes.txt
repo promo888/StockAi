@@ -1,1 +1,5 @@
 #for matplotlib sudo apt install python3-tk
+pycallgraph graphviz -o pycallgraph.png predict.py
+python -m cProfile predict.py
+       -m profile
+https://stackoverflow.com/questions/1557571/how-do-i-get-time-of-a-python-programs-execution

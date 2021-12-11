@@ -1,9 +1,11 @@
 import numpy as np
+import pandas as pd
 from technical_indicators_lib import *
 from ta.momentum import rsi as RSI, stoch as Stoch, roc as Roc, \
     kama as Kama, stochrsi as Stochrsi, williams_r as Williams, \
     ppo as Ppo, pvo as Pvo, tsi as Tsi
 from ta.volatility import BollingerBands as BBANDS
+from horology import timed
 
 #import tensorflow
 
@@ -31,7 +33,7 @@ def isUp2(df_data, ind1name, ind2name): #todo 2-5 cross (5 indicators cross, 5 v
     df_data[indName] = df_data[ind1name] >= df_data[ind2name]
     return df_data
 
-
+#@timed
 def pctChange1p(df_data, field):
     df_data['pctChange_%s' % field] = df_data[field].pct_change() * 100
     return df_data
@@ -39,6 +41,7 @@ def pctChange1p(df_data, field):
 #todo -HighLow%FromCloseByPeriod
 #todo - Done - shiftBack(-periods) to get forward/future PeriodMinMax
 #todo forward pct for predictions/actors + training/scroring quorum -> voting classifers/nns/rules
+#@timed
 def pctChangePriceByPeriod(df_data, period, fromField="close"): #todo to continue
     period_pct_change_high = []
     period_pct_change_low = []
@@ -55,10 +58,19 @@ def pctChangePriceByPeriod(df_data, period, fromField="close"): #todo to continu
         except:
             period_pct_change_high.append(None)
             period_pct_change_low.append(None)
-    df_data['pctChange_high_%speriods' % (period)] =[None] * (period+1) + period_pct_change_high #TODO check seems redundant
-    df_data['pctChange_low_%speriods' % (period)] = [None] * (period+1) + period_pct_change_low #period_pct_change_low
+    ##df_data['pctChange_high_%speriods' % (period)] =[None] * (period+1) + period_pct_change_high #TODO check seems redundant
+    ##df_data['pctChange_low_%speriods' % (period)] = [None] * (period+1) + period_pct_change_low #period_pct_change_low
+    dfHigh = pd.DataFrame()
+    dfLow = pd.DataFrame()
+    dfHigh['pctChange_high_%speriods' % (period)] = [None] * (period + 1) + period_pct_change_high
+    dfLow['pctChange_low_%speriods' % (period)] = [None] * (period+1) + period_pct_change_low
+    #df_data = pd.concat([df_data, dfHigh])
+    #df_data = pd.concat([df_data, dfLow])
+    df_data.update(dfHigh)
+    df_data.update(dfLow)
     return df_data
 
+#@timed
 def isHighLowFromPeriodBack(df_data, pct, period, fromField="close"): #todo to continue - duplicate above? + fromField high+low + crossFromHighLow
     period_pct_change_high = []
     period_pct_change_low = []
@@ -87,10 +99,14 @@ def isHighLowFromPeriodBack(df_data, pct, period, fromField="close"): #todo to c
             period_pct_change_high.append(None)
             period_pct_change_low.append(None)
 
-    df_data['is_%spctChange_isHigh_%speriods_back' % (pct, period)] = [None] * period + highs #todo isCrossUpisCrossDown
-    #df_data[f"is_isHighLowFromPeriodBack({pct},{period},{fromField})"] = [None] * period + highs
-    df_data['is_%spctChange_isLow_%speriods_back' % (pct, period)] = [None] * period + lows
-    #df_data.dropna()
+    # df_data['is_%spctChange_isHigh_%speriods_back' % (pct, period)] = [None] * period + highs #todo isCrossUpisCrossDown
+    # df_data['is_%spctChange_isLow_%speriods_back' % (pct, period)] = [None] * period + lows
+    dfHigh = pd.DataFrame()
+    dfLow = pd.DataFrame()
+    dfHigh['is_%spctChange_isHigh_%speriods_back' % (pct, period)] = [None] * period + highs
+    dfLow['is_%spctChange_isLow_%speriods_back' % (pct, period)] = [None] * period + lows
+    df_data.update(dfHigh)
+    df_data.update(dfLow)
     return df_data
 
 
