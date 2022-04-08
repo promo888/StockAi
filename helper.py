@@ -54,6 +54,7 @@ class Db:
     def persistDataFrame(dfData, toTable, pkCol="id", provider="sqlite", isMemory=True):
         if Db.con is None:
             Db.con = create_engine('sqlite:///:memory:', echo=False) #('sqlite://', echo=False)
+        #dfData[pkCol] = dfData.index
         dfData.to_sql(toTable, con=Db.con, if_exists='append', index=True, index_label=pkCol)
         #dfData.to_sql(toTable, Db.con) #, if_exists="append") #todo create table/index ->Pony
         #rs = con.execute(f"select * from {toTable}").fetchall()

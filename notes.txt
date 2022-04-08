@@ -3,3 +3,113 @@ pycallgraph graphviz -o pycallgraph.png predict.py
 python -m cProfile predict.py
        -m profile
 https://stackoverflow.com/questions/1557571/how-do-i-get-time-of-a-python-programs-execution
+
+
+
+enter2hilan
+
+
+
+binary_best_down_keys = corr_matrix["close"].where(corr_matrix["close"]<=-0.1).filter(regex='is.*').dropna().keys()
+binary_best_up_keys= corr_matrix["close"].where(corr_matrix["close"]>=0.1).filter(regex='is.*').dropna().keys()
+binary_best_keys = list(binary_best_down_keys) + list(binary_best_up_keys)
+
+profitPct = 0
+maxprofit = 0
+maxloss = 0
+closedTradesCount = 0
+good_trades_count = 0
+bad_trades_count = 0
+inpos = False
+inposValue = 0
+closePosValue = 0
+for index,i in self.df_data_copy.iterrows():
+    if i['rules_binary_features_sum'] <= 6 and not inpos: #openLong
+        inposValue = i['close']
+        inpos = True
+    elif i['rules_binary_features_sum'] >= 26 and inpos:    #closeLong
+        profit = (i['close']/inposValue-1)*100
+        profitPct += profit
+        inposValue = 0
+        inpos = False
+        if profit >= 0:
+            good_trades_count += 1
+            if profit > maxprofit:
+                maxprofit = profit
+        else:
+            bad_trades_count += 1
+            if profit < maxloss:
+                maxloss = profit
+        closedTradesCount += 1
+    elif i['rules_binary_features_sum'] >= 28 and inpos:    #openShort
+        inposValue = i['close']
+        inpos = True
+    elif i['rules_binary_features_sum'] <= 6 and inpos:    #closeShort
+        profit = (inposValue/i['close']-1)*100
+        profitPct += profit
+        inposValue = 0
+        inpos = False
+        if profit >= 0:
+            good_trades_count += 1
+            if profit > maxprofit:
+                maxprofit = profit
+        else:
+            bad_trades_count += 1
+            if profit < maxloss:
+                maxloss = profit
+        closedTradesCount += 1
+
+
+
+profitPct = 0
+maxprofit = 0
+maxloss = 0
+closedTradesCount = 0
+good_trades_count = 0
+bad_trades_count = 0
+inpos = False
+inposValue = 0
+closePosValue = 0
+for index,i in self.df_data_copy.iterrows():
+    if i['rules_binary_features_sum'] <= 2 and not inpos: #openLong
+        inposValue = i['close']
+        inpos = True
+    elif i['rules_binary_features_sum'] >= 28 and inpos:    #closeLong
+        profit = (i['close']/inposValue-1)*100
+        profitPct += profit
+        inposValue = 0
+        inpos = False
+        if profit >= 0:
+            good_trades_count += 1
+            if profit > maxprofit:
+                maxprofit = profit
+        else:
+            bad_trades_count += 1
+            if profit < maxloss:
+                maxloss = profit
+        closedTradesCount += 1
+    elif i['rules_binary_features_sum'] >= 29 and inpos:    #openShort
+        inposValue = i['close']
+        inpos = True
+    elif i['rules_binary_features_sum'] <= 2 and inpos:    #closeShort
+        profit = (inposValue/i['close']-1)*100
+        profitPct += profit
+        inposValue = 0
+        inpos = False
+        if profit >= 0:
+            good_trades_count += 1
+            if profit > maxprofit:
+                maxprofit = profit
+        else:
+            bad_trades_count += 1
+            if profit < maxloss:
+                maxloss = profit
+        closedTradesCount += 1
+
+#50 instead of 300 trades - maxLoss 7 insteadOf 11, maxProfit 46 instead 17, good_bad_ratio 3/1 instead of 2/1, totalProfit 200 instead 250
+#todo optimize
+
+fix stop loss + pctProfitCalc
+makeEntry +-5,10% from signal
+measure/learn drawdown [MaxLoss/MaxProfit - 10d] (+agent)
+run agent on other assets =  avg Strat for all + todo combined assets strat (PortfolioAgent)

@@ -5,6 +5,7 @@ from sklearn.ensemble import GradientBoostingClassifier as gbc
 from sklearn.tree import DecisionTreeRegressor as dtr
 
 import matplotlib.pyplot as plt
+import pylab
 import preproc
 from helper import *
 #import helper
@@ -236,6 +237,226 @@ class Predictor:
         print()
         return self.inputs_data_binary
 
+    @timed
+    def preprocBinaryFeatures2(self, df_data, corr_field="close"):
+        start = timeit.default_timer()
+        # split continuous and binary features
+        binary_data_cols = [col for col in df_data if
+                            np.isin(df_data[col].dropna().unique(),
+                                    [0, 1]).all()]
+        continuous_data_cols = [col for col in df_data if
+                                not np.isin(df_data[col].dropna().unique(),
+                                            [0, 1]).all()]
+        self.inputs_data_binary = df_data[binary_data_cols]  # get rid of continuous features/values
+        self.inputs_data_continuous = df_data[continuous_data_cols]  # get rid of continuous features/values
+
+        # range binary features if exist
+        if not self.inputs_data_binary is None and self.inputs_data_binary.shape[0] > 0:
+
+            corr_data = self.inputs_data_binary.copy(deep=True)
+            corr_data['close'] = df_data['close']
+            corr_data['high'] = df_data['high']
+            corr_data['low'] = df_data['low']
+            corr_matrix = corr_data.corr()
+            print(f"Total binary features {self.inputs_data_binary.shape[1]}")
+            print("removing correlating binary features..")
+            binary_best_down_keys = corr_matrix[corr_field].where(corr_matrix[corr_field] <= -0.1).filter(
+                regex='is.*').dropna().keys()
+            binary_best_up_keys = corr_matrix[corr_field].where(corr_matrix[corr_field] >= 0.1).filter(
+                regex='is.*').dropna().keys()
+            binary_best_keys = list(binary_best_down_keys) + list(binary_best_up_keys)
+
+
+            #removed_cols = list(set(corr_data.filter(regex='is.*'))-set(binary_best_keys))
+            ##corr_data.drop(removed_cols, axis=1, inplace=True) #todo to check bad perf on highly vorrelted features
+            self.inputs_data_binary = corr_data.filter(regex='is.*')
+            corr_data["rules_binary_features_sum"] = self.inputs_data_binary.sum(axis=1)
+            #print(f"Removed weak correlating binary features:{removed_cols}")
+
+        print(f"preprocBinaryFeatures {self.df_data_copy.shape} took {timeit.default_timer() - start}s")
+        print()
+        self.chartBinarySumStrat(corr_data)
+        return self.inputs_data_binary
+
+
+    def chartBinarySumStrat(self, df_data, corr_field="close"): #todo binary_sum for high/low
+        profitPct = 0
+        maxprofit = 0
+        maxloss = 0
+        closedTradesCount = 0
+        good_trades_count = 0
+        bad_trades_count = 0
+        inpos = False
+        inposValue = 0
+        take_profit_pct = 7 #15% 10
+        stop_loss_pct = 10f #8% 5
+        total_trades = []
+        long_trades = []
+        short_trades = []
+        good_trades = []
+        bad_trades = []
+        good_long_trades = []
+        bad_long_trades = []
+        good_short_trades = []
+        bad_short_trades = []
+        entries = []
+        exits = []
+        trades = []
+        df_data['direction'] = 0 # 0 - OutOfMarket, 1 - short, 2 - long, closePos = 3
+        for i, row in df_data.iterrows():
+            if row['rules_binary_features_sum'] <= 2 and not inpos:  # openLong
+                inposValue = row[corr_field]
+                inpos = True
+                trades.append({'Date': {i}, 'TradeType': 'Open', 'PositionType': 'Long', 'Price': row['close']})
+                row['direction'] = 2
+                df_data.at[i, 'direction'] = 2
+                next
+            elif inpos and trades[-1]['PositionType'] == 'Long':  # takeProfitLong
+                profit = (row["high"]/inposValue - 1) * 100
+                if profit >= take_profit_pct:
+                    good_trades_count += 1
+                    if take_profit_pct > maxprofit:
+                        maxprofit = take_profit_pct
+                    profitPct += take_profit_pct
+                    closedTradesCount += 1
+                    trades.append({'Date': {i}, 'TradeType': 'CloseTakeProfit', 'PositionType': 'Long', 'Price': inposValue*(1+take_profit_pct/100),
+                               'profitPct': take_profit_pct})
+                    row['direction'] = 3
+                    df_data.at[i, 'direction'] = 4
+                    inposValue = 0
+                    inpos = False
+                    next
+
+            elif inpos and trades[-1]['PositionType'] == 'Long':  # stopLossLong
+                profit = (inposValue / row["low"] - 1) * 100
+                if profit >= stop_loss_pct:
+                    bad_trades_count += 1
+                    if profit > maxloss:
+                        maxloss = profit
+                    profitPct -= stop_loss_pct
+                    closedTradesCount += 1
+                    trades.append({'Date': {i}, 'TradeType': 'CloseStopLoss', 'PositionType': 'Long', 'Price': inpos*(1-stop_loss_pct/100),
+                               'profitPct': stop_loss_pct*-1})
+                    row['direction'] = 3
+                    df_data.at[i, 'direction'] = 5
+                    inposValue = 0
+                    inpos = False
+                    next
+
+            elif row['rules_binary_features_sum'] >= 28 and inpos and trades[-1]['PositionType'] == 'Long':  # closeLong
+                profit = (row[corr_field] / inposValue - 1) * 100
+                profitPct += profit
+                inposValue = 0
+                inpos = False
+                if profit >= 0:
+                    good_trades_count += 1
+                    if profit > maxprofit:
+                        maxprofit = profit
+                else:
+                    bad_trades_count += 1
+                    if profit < maxloss:
+                        maxloss = profit
+                closedTradesCount += 1
+                trades.append({'Date': {i}, 'TradeType': 'Close', 'PositionType': 'Long', 'Price': row['close'], 'profitPct':{(row['close']/trades[-1]['Price']-1)*100}})
+                row['direction'] = 3
+                df_data.at[i, 'direction'] = 3
+                next
+
+            elif row['rules_binary_features_sum'] >= 29 and not inpos:  # openShort
+                inposValue = row['close']
+                inpos = True
+                trades.append({'Date': {i}, 'TradeType': 'Open', 'PositionType': 'Short', 'Price': row['close']})
+                row['direction'] = 1
+                df_data.at[i, 'direction'] = 1
+                next
+
+            elif inpos and trades[-1]['PositionType'] == 'Short':  # closeShortStopLoss
+                profit = (inposValue/row['high'] - 1) * 100
+                if profit <= -stop_loss_pct:
+                    profitPct -= stop_loss_pct
+                    bad_trades_count += 1
+                    if stop_loss_pct > maxloss:
+                        maxloss = stop_loss_pct
+                    closedTradesCount += 1
+                    trades.append({'Date': {i}, 'TradeType': 'CloseStopLoss', 'PositionType': 'Short', 'Price': inposValue*(1+stop_loss_pct/100),
+                               'profitPct': stop_loss_pct*-1})
+
+                    row['direction'] = 3
+                    df_data.at[i, 'direction'] = 5
+                    inposValue = 0
+                    inpos = False
+                    next
+
+            elif inpos and trades[-1]['PositionType'] == 'Short':  # closeShortTakeProfit
+                profit = (inposValue / row['low'] - 1) * 100
+                if profit >= take_profit_pct:
+                    profitPct += take_profit_pct
+                    good_trades_count += 1
+                    if profit > maxprofit:
+                        maxprofit = profit
+                    closedTradesCount += 1
+                    trades.append({'Date': {i}, 'TradeType': 'CloseTakeProfit', 'PositionType': 'Short', 'Price': inposValue*(1-take_profit_pct/100),
+                               'profitPct': take_profit_pct})
+                    row['direction'] = 3
+                    df_data.at[i, 'direction'] = 4
+                    inposValue = 0
+                    inpos = False
+                    next
+
+            elif row['rules_binary_features_sum'] <= 2 and inpos and trades[-1]['PositionType'] == 'Short':  # closeShort
+                profit = (inposValue / row['close'] - 1) * 100
+                profitPct += profit
+                if profit >= 0:
+                    good_trades_count += 1
+                    if profit > maxprofit:
+                        maxprofit = profit
+                else:
+                    bad_trades_count += 1
+                    if profit < maxloss:
+                        maxloss = profit
+                closedTradesCount += 1
+                trades.append({'Date': {i}, 'TradeType': 'Close', 'PositionType': 'Short', 'Price': row['close'],
+                               'profitPct': {(trades[-1]['Price']/row['close'] - 1) * 100}})
+                row['direction'] = 3
+                df_data.at[i, 'direction'] = 3
+                inposValue = 0
+                inpos = False
+                next
+
+        # print(f"Binary_Features Strat Results: \nTotalProfit:{}\nLongProfit:{}ShortProfit"
+        #       f"\nMaxProfit:{}\nMaxLoss:{}\nTotalCloseTrades:{}\nTotalLongTrades{}\nTotalShortTrades"
+        #       f"\nLongTradesGoodBadTradesRatio:{}\nShortTradesGoodBadTradesRatio:{}\nGoodBadTradesRatio{}"
+        #       f"\nLongMedianProfitPct:{}\nShortMedianProfitPct:{}\nLongMedianLossPct:{}\nShortMedianLossPct:{}")
+
+        for t in trades:
+            print(t, "\n")
+
+        df = pd.DataFrame(
+            {'Date': df_data.index,
+             'Close': df_data["close"],
+             'Direction': df_data['direction']
+
+             #,
+             # 'BuyLong': [t['Price'] for t in trades if t['PositionType']=="Long" and t['TradeType']=="Open"],
+             # 'CloseLong': [t['Price'] for t in trades if t['PositionType'] == "Long" and t['TradeType'] == "Close"],
+             # 'SellShort': [t['Price'] for t in trades if t['PositionType'] == "Short" and t['TradeType'] == "Open"],
+             # 'CloseShort': [t['Price'] for t in trades if t['PositionType'] == "Short" and t['TradeType'] == "Close"],
+             }
+        )
+        df.dropna(inplace=True)
+        colormap = np.array(['blue', 'red', 'green', 'orange', 'magenta', 'pink'])
+        categories = np.array(df["Direction"])
+        # plt.legend(["wait", "sell", "buy"], loc="upper right")
+        # df.plot.legend(["wait", "sell", "buy"], loc="upper right")
+        #plt.plot('Date', 'Close', data=df, marker='o', markerfacecolor='blue', markersize=10, color='skyblue', linewidth=2)
+
+        df.plot.scatter("Date", 'Close', color=colormap[categories], title=self.ticker)
+        #plt.savefig(f"charts/{self.ticker}_binarySumStrat.png")
+        #plt.show()
+        pylab.show()
+
+
+
     def shiftDfData(self, df_data, shift_field, shift_period=0, inplace=True):
         df = df_data
         if not inplace:
@@ -432,13 +653,13 @@ class Predictor:
         # best_down_rules_dates = set([item for item in best_down_rules for item in item["predicted_trade_dates"]])
 
         worst_up_rules_q = [item["ruleDesc"] for item in self.periodResults["period_up_rules"] if
-                            item["start_date"] == df.index[startExplore] and item["predicted_true_pct"] <= 0.3 and item["predicted_true"] >=minGoodPeriodsPredicted]
+                            item["start_date"] == df.index[startExplore] and item["predicted_true_pct"] <= 0.2 and item["predicted_true"] >=minGoodPeriodsPredicted]
         best_up_rules_q = [item["ruleDesc"] for item in self.periodResults["period_up_rules"] if
                            item["start_date"] == df.index[startExplore] and item["predicted_true_pct"] >= 0.8 and item["predicted_true"] >=minGoodPeriodsPredicted ]
         worst_down_rules_q = [item["ruleDesc"] for item in self.periodResults["period_down_rules"] if
                               item["start_date"] == df.index[startExplore] and item["predicted_true_pct"] <= 0.2 and item["predicted_true"] >=minGoodPeriodsPredicted]
         best_down_rules_q = [item["ruleDesc"] for item in self.periodResults["period_down_rules"] if
-                             item["start_date"] == df.index[startExplore] and item["predicted_true_pct"] >= 0.7 and item["predicted_true"] >=minGoodPeriodsPredicted]
+                             item["start_date"] == df.index[startExplore] and item["predicted_true_pct"] >= 0.8 and item["predicted_true"] >=minGoodPeriodsPredicted]
 
         up_rules = best_up_rules_q + worst_down_rules_q
         up_rules_queries = [f"select * from {tableName} where {' and '.join(item.split(' and ')[:-1])} and rowid>={startPredict} and rowid<{startPredict + predictPeriods}"
@@ -495,7 +716,7 @@ class Predictor:
 
         up_exits = [d + abs(self.predictFieldShift) for d in up_entries]
         rsPredictionsUp = Db.execute(f"select {predictField} from {tableName} where rowid in ({','.join([str(i) for i in up_exits])})")
-        print(len(up_rules), 'up_rules')
+        print(len(up_rules), 'up_rules', len(set(up_rules)))
         profit_up = None
         if len(up_exits) > 0:
             print(
@@ -509,7 +730,7 @@ class Predictor:
 
         down_exits = [d + abs(self.predictFieldShift) for d in down_entries]
         rsPredictionsDown = Db.execute(f"select {predictField} from {tableName} where rowid in ({','.join([str(i) for i in down_exits])})")
-        print(len(down_rules), 'down_rules')
+        print(len(down_rules), 'down_rules', len(set(down_rules)))
         profit_down = None
         if len(down_exits)>0:
             print(f"Down {len([x for x in rsPredictionsDown if x[0] == 0])} good trades from total {len(down_entries)} trades in period between {predict_days_down[0]}-{predict_days_down[-1]}")
@@ -526,7 +747,7 @@ class Predictor:
         elif profit_up is not None and profit_down is None:
             total_period_profit = profit_up
         else:
-            total_period_profit = 'None'
+            total_period_profit = 0
         print(f"Period PL {total_period_profit}%")
         self.periodResults['periodsResults'].append({
             'from': startPredict,
@@ -610,7 +831,7 @@ class Predictor:
         tableName = tableName.replace("^", "")
         self.ticker = tableName
         self.cleanData()
-        binary_features = self.preprocBinaryFeatures(self.df_data_copy)
+        binary_features = self.preprocBinaryFeatures2(self.df_data_copy)
         Db.persistDataFrame(self.df_data_copy, tableName) #with corelated (all) features
         Db.persistDataFrame(binary_features, f"{self.ticker}_binary_features") #uncorrelated binary features
         total_periods = len(binary_features)
@@ -651,8 +872,9 @@ class Predictor:
 if __name__ == "__main__":
     #PreprocData.run([{"print": ["a", "b"]}])
     start = timeit.default_timer() #^GSPC AI
-    ticker = 'PLTR'
-    data = DataReader(ticker=ticker, fromDate="1999-01-01", toDate="2021-12-31", interval="1d", index_as_date=True).getData() #todo global -> distrubute to Predictors Grid/Threads/Gpus
-    predictor = Predictor(ticker, data, predictField="isUp_close", predictFieldShift=-1, startTrain=-290, trainPeriods=100, predictPeriods=20) #todo tochange? startTrain to last
+    ticker = '^GSPC' #'PLTR' 1995 -5555
+    data = DataReader(ticker=ticker, fromDate="2005-01-01", toDate="2022-12-31", interval="1d", index_as_date=True).getData() #todo global -> distrubute to Predictors Grid/Threads/Gpus
+    predictor = Predictor(ticker, data, predictField="isUp_close", predictFieldShift=-1, startTrain=-3000, trainPeriods=100, predictPeriods=5) #todo tochange? startTrain to last
+    #-333
     predictor.run()
     print(f"Run took {timeit.default_timer() - start}s")

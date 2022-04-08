@@ -5,7 +5,7 @@ from ta.momentum import rsi as RSI, stoch as Stoch, roc as Roc, \
     kama as Kama, stochrsi as Stochrsi, williams_r as Williams, \
     ppo as Ppo, pvo as Pvo, tsi as Tsi
 from ta.volatility import BollingerBands as BBANDS
-from horology import timed
+#from horology import timed
 
 #import tensorflow
 
